@@ -4,6 +4,7 @@ import sqlalchemy as sqla
 import kagglehub
 import os
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import seaborn as sns
 from dotenv import load_dotenv
 
@@ -38,92 +39,69 @@ for table in tables:
     df = pd.read_csv(f"{path}/{table}.csv")
     df.to_sql(table, engine, if_exists='replace', index=False)
     
-# SQL query to create a table with player statistics, including age, market value, and score of attack or midfield positions.
-# Additionally, categorize players into age groups and score brackets in order to analyze their performance.
-# The score is calculated using a formula that considers the number of goals, yellow cards, and red cards.
-# Finally, calculate the average market value for each category.
+# SQL query to create a table with player statistics, including age and market value of all positions.<br>
+# Categorize players into age groups.<br>
+# Finally, calculate the average market value for each age bin.
 
 avg_mkt_value_by_age = pd.read_sql_query(
     """
     -- Create a CTE to calculate age and score for each player
     WITH player_stats AS (
-    SELECT
-        p.player_id,
-        p.market_value_in_eur,
-        TIMESTAMPDIFF(YEAR, p.date_of_birth, CURDATE()) AS age,
-        SUM(a.goals) AS goals,
-        SUM(a.yellow_cards) AS yellow_cards,
-        SUM(a.red_cards) AS red_cards,
-        -- Score formula is:
-        -- goals: The number of goals scored by the player. Each goal increases the score by 1
-        -- yellow_cards: The number of yellow cards received. Each yellow card decreases the score by 0.5 
-        -- red_cards: The number of red cards received. Each red card decreases the score by 1
-        (SUM(a.goals) - (SUM(a.yellow_cards) * 0.5 + SUM(a.red_cards))) AS score
-    FROM
-        players p
-        JOIN appearances a ON p.player_id = a.player_id
-        -- Select only players with position of Attack or Midfield
-        WHERE p.position = 'Attack' OR 'Midfield'
-    GROUP BY
-        p.player_id, p.market_value_in_eur, age
+        SELECT
+            p.player_id,
+            p.market_value_in_eur,
+            TIMESTAMPDIFF(YEAR, p.date_of_birth, CURDATE()) AS age
+        FROM
+            players p
+            JOIN appearances a ON p.player_id = a.player_id
+        GROUP BY
+            p.player_id, p.market_value_in_eur, age
     ),
-
     -- Add age groups and score brackets
     categorized AS (
-    SELECT
-        *,
-        CASE
-        WHEN age < 20 THEN '<20'
-        WHEN age BETWEEN 20 AND 24 THEN '20-24'
-        WHEN age BETWEEN 25 AND 29 THEN '25-29'
-        WHEN age BETWEEN 30 AND 34 THEN '30-34'
-        ELSE '35+'
-        END AS age_group,
-        CASE
-        WHEN score < 0 THEN '<0'
-        WHEN score BETWEEN 0 AND 10 THEN '0-10'
-        ELSE '10+'
-        END AS score_bracket
-    FROM player_stats
+        SELECT
+            *,
+            CASE
+                WHEN age < 20 THEN '<20'
+                WHEN age BETWEEN 20 AND 24 THEN '20-24'
+                WHEN age BETWEEN 25 AND 29 THEN '25-29'
+                WHEN age BETWEEN 30 AND 34 THEN '30-34'
+                ELSE '35+'
+            END AS age_group
+        FROM player_stats
     )
 
-    -- Final aggregation: average market value by age group and score bracket
+    -- Final aggregation: average market value by age group
     SELECT
-    age_group,
-    score_bracket,
-    COUNT(*) AS num_players,
-    ROUND(AVG(market_value_in_eur), 2) AS avg_market_value_eur
+        age_group,
+        COUNT(*) AS num_players,
+        ROUND(AVG(market_value_in_eur), 2) AS avg_market_value_eur
     FROM
-    categorized
+        categorized
     GROUP BY
-    age_group, score_bracket
+        age_group
     ORDER BY
-    age_group, score_bracket;
+        age_group;
 """,
     engine
 )
 
-# Plot the data of average market value by age group and score bracket of  attack or midfield football players
-
-import matplotlib.ticker as mticker
-
+# Plot the data of average market value by age group of all positions
 fig, ax = plt.subplots(figsize=(10, 6))
-for score_bracket in avg_mkt_value_by_age['score_bracket'].unique():
-    subset = avg_mkt_value_by_age[avg_mkt_value_by_age['score_bracket'] == score_bracket]
-    ax.plot(subset['age_group'], subset['avg_market_value_eur'], marker='o', label=score_bracket)
-
+for score_bracket in avg_mkt_value_by_age['age_group'].unique():
+    subset = avg_mkt_value_by_age[avg_mkt_value_by_age['age_group'] == score_bracket]
+    ax.bar(subset['age_group'], subset['avg_market_value_eur'], label=score_bracket)
+ax.set_title('Average Market Value of Football Players of All Positions by Age Group')
 ax.set_xlabel('Age Group')
-ax.set_ylabel('Average Market Value (€)')
-ax.set_title('Average Market Value by Age Group and Score Bracket of Attack and Midfield Football Players')
-ax.legend(title='Score Bracket')
-ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'€{int(x):,}'))
+ax.set_ylabel('Average Market Value (EUR)')
+ax.legend(title='Age Group')
+ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'{int(x/1e6)}M'))
+plt.xticks(rotation=45)
 plt.tight_layout()
 plt.show()
 
-# SQL query to create a CTE with player statistics, including player id, market value, club id and competition name.
-# Additionally, create a score to analyze players' performance using a formula that considers the number of goals, yellow and red cards.
-# Finally, query the competitions table for league competitiveness and aggregate the number of players, average market value and
-# average performance score.
+# SQL query to create a CTE with player statistics, including player id, market value, club id and competition name.<br>
+# Finally, query the competitions table for league competitiveness and aggregate the number of players and average market value.
 
 league_competitiveness = pd.read_sql_query(
     """
@@ -132,22 +110,12 @@ league_competitiveness = pd.read_sql_query(
     SELECT
         p.player_id,
         p.market_value_in_eur,
-        comp.name AS competition_name,
-        SUM(a.goals) AS total_goals,
-        SUM(a.yellow_cards) AS total_yellow_cards,
-        SUM(a.red_cards) AS total_red_cards,
-        -- Score formula is:
-        -- goals: The number of goals scored by the player. Each goal increases the score by 1
-        -- yellow_cards: The number of yellow cards received. Each yellow card decreases the score by 0.5 
-        -- red_cards: The number of red cards received. Each red card decreases the score by 1
-        (SUM(a.goals) - (SUM(a.yellow_cards) * 0.5 + SUM(a.red_cards))) AS performance_score
+        comp.name AS competition_name
     FROM
         players p
         JOIN clubs c ON p.current_club_id = c.club_id
         JOIN competitions comp ON c.domestic_competition_id = comp.competition_id
         JOIN appearances a ON p.player_id = a.player_id
-        -- Select only players with position of Attack or Midfield
-        WHERE p.position = 'Attack' OR 'Midfield'
     GROUP BY
         p.player_id, p.market_value_in_eur, competition_name
     )
@@ -164,8 +132,7 @@ league_competitiveness = pd.read_sql_query(
         ELSE 'Less Competitive'
     END AS league_competitiveness,
     COUNT(*) AS num_players,
-    ROUND(AVG(market_value_in_eur), 2) AS avg_market_value_eur,
-    ROUND(AVG(performance_score), 2) AS avg_performance_score
+    ROUND(AVG(market_value_in_eur), 2) AS avg_market_value_eur
     FROM
     player_stats
     GROUP BY
@@ -174,18 +141,18 @@ league_competitiveness = pd.read_sql_query(
     engine
 )
 
-# Plot the data of average market value by league competitiveness for attack or midfield football players
+# Plot the data of average market value by league competitiveness for all positions
 
 fig, ax = plt.subplots(figsize=(8, 5))
 bars = ax.bar(
     league_competitiveness['league_competitiveness'],
     league_competitiveness['avg_market_value_eur'],
-    color=['#20beff', '#ff7f0e']
+    color=['#20beff', '#ffbd59']
 )
 
 ax.set_xlabel('League Competitiveness')
 ax.set_ylabel('Average Market Value (€)')
-ax.set_title('Average Market Value by League Competitiveness for Attack and Midfield players')
+ax.set_title('Average Market Value by League Competitiveness for All Player Positions')
 
 # Format y-axis as EUR currency
 ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'€{int(x):,}'))
@@ -201,3 +168,47 @@ for bar in bars:
 
 plt.tight_layout()
 plt.show()
+
+# Bonus: SQL query to find the top 10 attack and midfield players with the highest market value.
+
+highest_market_value = pd.read_sql_query(
+    """
+    SELECT
+        p.name AS player_name,
+        TIMESTAMPDIFF(YEAR, p.date_of_birth, CURDATE()) AS age,
+        p.position,
+        p.market_value_in_eur,
+        c.name AS club_name,
+        comp.name AS competition_name
+    FROM
+        players p
+        JOIN clubs c ON p.current_club_id = c.club_id
+        JOIN competitions comp ON c.domestic_competition_id = comp.competition_id
+        WHERE
+        p.position IN ('Attack', 'Midfield')
+    ORDER BY
+        p.market_value_in_eur DESC
+    LIMIT 10;
+""",
+    engine
+)
+highest_market_value
+
+# Average age and market value of the top 10 attack and midfield players with the highest market value
+
+avg_age_and_market_value_top10 = pd.read_sql_query(
+    """
+    SELECT
+        AVG(TIMESTAMPDIFF(YEAR, p.date_of_birth, CURDATE())) AS avg_age,
+        AVG(p.market_value_in_eur) AS avg_market_value
+    FROM (
+        SELECT *
+        FROM players
+        WHERE position IN ('Attack', 'Midfield')
+        ORDER BY market_value_in_eur DESC
+        LIMIT 10
+    ) p
+""",
+    engine
+)
+avg_age_and_market_value_top10
